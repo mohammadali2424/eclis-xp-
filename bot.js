@@ -13,14 +13,9 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const SELF_BOT_ID = process.env.SELF_BOT_ID || 'xp_bot_1';
 const OWNER_ID = parseInt(process.env.OWNER_ID) || 0;
 
-// بررسی وجود متغیرهای محیطی
-if (!BOT_TOKEN || !SUPABASE_URL || !SUPABASE_KEY) {
-  console.log('❌ خطا: متغیرهای محیطی تنظیم نشده‌اند!');
-  process.exit(1);
-}
-
-console.log('✅ متغیرها�� محیطی بررسی شدند');
-console.log('🔑 مالک:', OWNER_ID);
+console.log('🔧 شروع راه‌اندازی ربات...');
+console.log('👤 مالک:', OWNER_ID);
+console.log('🤖 شناسه ربات:', SELF_BOT_ID);
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const bot = new Telegraf(BOT_TOKEN);
@@ -30,7 +25,7 @@ app.use(express.json());
 // ==================[ پینگ ]==================
 const startAutoPing = () => {
   if (!process.env.RENDER_EXTERNAL_URL) {
-    console.log('⚠️ RENDER_EXTERNAL_URL تنظیم نشده - پینگ غیرفعال');
+    console.log('⚠️ RENDER_EXTERNAL_URL تنظیم نشده');
     return;
   }
   
@@ -47,13 +42,15 @@ const startAutoPing = () => {
   };
 
   console.log('🔄 شروع پینگ خودکار...');
-  setTimeout(performPing, 10000);
+  setTimeout(performPing, 5000);
   setInterval(performPing, PING_INTERVAL);
 };
 
 // ==================[ بررسی مالکیت ]==================
 const checkOwnerAccess = (ctx) => {
   const userId = ctx.from.id;
+  console.log(`🔐 بررسی دسترسی کاربر ${userId} - مالک: ${OWNER_ID}`);
+  
   if (userId !== OWNER_ID) {
     return {
       hasAccess: false,
@@ -66,38 +63,32 @@ const checkOwnerAccess = (ctx) => {
 // ==================[ مدیریت دیتابیس XP ]==================
 const initializeDatabase = async () => {
   try {
-    console.log('🔧 برر��ی ساختار دیتابیس...');
+    console.log('🔧 بررسی ساختار دیتابیس...');
     
-    // ایجاد جدول active_groups اگر وجود ندارد
-    const { error: groupsError } = await supabase
+    // تست اتصال به دیتابیس
+    const { data, error } = await supabase
       .from('active_groups')
       .select('*')
       .limit(1);
     
-    if (groupsError && groupsError.code === '42P01') {
-      console.log('📦 ایجاد جدول active_groups...');
-      // در Supabase باید از SQL استفاده کنیم یا از رابط کاربری جدول را ایجاد کنیم
+    if (error) {
+      console.log('❌ خطا در اتصال به دیتابیس:', error.message);
+      return false;
     }
-
-    // ایجاد جدول user_xp اگر وجود ندارد
-    const { error: xpError } = await supabase
-      .from('user_xp')
-      .select('*')
-      .limit(1);
     
-    if (xpError && xpError.code === '42P01') {
-      console.log('📦 ایجاد جدول user_xp...');
-    }
-
-    console.log('✅ دیتابیس آماده است');
+    console.log('✅ اتصال به دیتابیس موفق');
+    return true;
   } catch (error) {
-    console.log('⚠️ خطا در بررسی دیتابیس:', error.message);
+    console.log('❌ خطا در بررسی دیتابیس:', error.message);
+    return false;
   }
 };
 
 // ذخیره XP کاربر
 const saveUserXP = async (userId, username, firstName, xpToAdd) => {
   try {
+    console.log(`💾 ذخیره XP برای کاربر ${userId}: ${xpToAdd} XP`);
+    
     const { data: existingUser, error: fetchError } = await supabase
       .from('user_xp')
       .select('*')
@@ -121,6 +112,8 @@ const saveUserXP = async (userId, username, firstName, xpToAdd) => {
       if (!insertError) {
         console.log(`✅ کاربر جدید ${userId} با ${xpToAdd} XP ذخیره شد`);
         return xpToAdd;
+      } else {
+        console.log('❌ خطا در insert کاربر جدید:', insertError);
       }
     } else if (!fetchError && existingUser) {
       // کاربر موجود
@@ -143,7 +136,11 @@ const saveUserXP = async (userId, username, firstName, xpToAdd) => {
       if (!updateError) {
         console.log(`📈 کاربر ${userId} +${xpToAdd} XP (مجموع: ${newCurrentXP})`);
         return newCurrentXP;
+      } else {
+        console.log('❌ خطا در update کاربر:', updateError);
       }
+    } else {
+      console.log('❌ خطای fetch کاربر:', fetchError);
     }
   } catch (error) {
     console.log('❌ خطا در ذخیره XP:', error.message);
@@ -154,15 +151,46 @@ const saveUserXP = async (userId, username, firstName, xpToAdd) => {
 // بررسی فعال بودن گروه
 const isGroupActive = async (chatId) => {
   try {
+    console.log(`🔍 بررسی فعال بودن گروه ${chatId}...`);
+    
     const { data, error } = await supabase
       .from('active_groups')
       .select('group_id')
       .eq('group_id', chatId.toString())
       .single();
 
-    return !error && data;
+    const isActive = !error && data;
+    console.log(`📊 گروه ${chatId} فعال: ${isActive}`);
+    return isActive;
   } catch (error) {
     console.log('❌ خطا در بررسی گروه فعال:', error.message);
+    return false;
+  }
+};
+
+// فعال کردن گروه
+const activateGroup = async (chatId, chatTitle, activatedBy) => {
+  try {
+    console.log(`🔧 فعال‌سازی گروه ${chatId} - ${chatTitle}...`);
+    
+    const { error } = await supabase
+      .from('active_groups')
+      .upsert({
+        group_id: chatId.toString(),
+        group_title: chatTitle,
+        activated_by: activatedBy,
+        activated_at: new Date().toISOString()
+      }, { onConflict: 'group_id' });
+
+    if (error) {
+      console.log('❌ خطا در فعال‌سازی گروه:', error);
+      return false;
+    }
+    
+    console.log(`✅ گروه ${chatId} با موفقیت فعال شد`);
+    return true;
+  } catch (error) {
+    console.log('❌ خطا در activateGroup:', error.message);
     return false;
   }
 };
@@ -170,13 +198,18 @@ const isGroupActive = async (chatId) => {
 // دریافت لیست تمام کاربران با XP
 const getAllUsersXP = async () => {
   try {
+    console.log('📋 دریافت لیست کاربران از دیتابیس...');
+    
     const { data, error } = await supabase
       .from('user_xp')
       .select('user_id, username, first_name, current_xp, message_count')
       .order('current_xp', { ascending: false });
 
     if (!error && data) {
+      console.log(`✅ ${data.length} کاربر دریافت شد`);
       return data;
+    } else {
+      console.log('❌ خطا در دریافت لیست کاربران:', error);
     }
   } catch (error) {
     console.log('❌ خطا در دریافت لیست XP:', error.message);
@@ -187,6 +220,8 @@ const getAllUsersXP = async () => {
 // ریست XP همه کاربران
 const resetAllXP = async () => {
   try {
+    console.log('🔄 ریست XP همه کاربران...');
+    
     const { error } = await supabase
       .from('user_xp')
       .update({ 
@@ -198,6 +233,8 @@ const resetAllXP = async () => {
     if (!error) {
       console.log('✅ تمام XP ها ریست شدند');
       return true;
+    } else {
+      console.log('❌ خطا در ریست XP:', error);
     }
   } catch (error) {
     console.log('❌ خطا در ریست XP:', error.message);
@@ -215,14 +252,61 @@ const calculateXPFromMessage = (text) => {
   // هر 4 خط = 20 XP
   const xpEarned = Math.floor(lineCount / 4) * 20;
   
+  console.log(`📊 محاسبه XP: ${lineCount} خط = ${xpEarned} XP`);
   return xpEarned;
 };
+
+// ==================[ پردازش اعضای جدید - برای لفت دادن ]==================
+bot.on('new_chat_members', async (ctx) => {
+  try {
+    console.log('👥 دریافت عضو جدید در گروه');
+    
+    // بررسی اگر ربات اضافه شده باشد
+    for (const member of ctx.message.new_chat_members) {
+      if (member.is_bot && member.id === ctx.botInfo.id) {
+        const addedBy = ctx.message.from;
+        console.log(`🤖 ربات توسط کاربر ${addedBy.id} (${addedBy.first_name}) اضافه شد`);
+        
+        // بررسی مالکیت
+        if (addedBy.id !== OWNER_ID) {
+          console.log(`🚫 کاربر ${addedBy.id} مالک نیست - لفت دادن از گروه`);
+          await ctx.reply('🚫 این ربات متعلق به مجموعه اکلیس است ، فقط مالک اکلیس میتواند از ما استفاده کند');
+          
+          try {
+            await ctx.leaveChat();
+            console.log('✅ ربات با موفقیت از گروه خارج شد');
+          } catch (leaveError) {
+            console.log('❌ خطا در خروج از گروه:', leaveError.message);
+          }
+          return;
+        }
+        
+        console.log(`✅ ربات توسط مالک ${addedBy.id} اضافه شد`);
+        await ctx.reply('✅ ربات با موفقیت اضافه شد! از /on1 برای فعال‌سازی استفاده کنید.');
+        return;
+      }
+    }
+  } catch (error) {
+    console.log('❌ خطا در پردازش عضو جدید:', error.message);
+  }
+});
 
 // ==================[ پردازش پیام‌ها ]==================
 bot.on('text', async (ctx) => {
   try {
-    console.log('📨 دریافت پیام از:', ctx.from.first_name, 'در گروه:', ctx.chat.title);
+    const userName = ctx.from.first_name || 'ناشناس';
+    const chatTitle = ctx.chat.title || 'بدون عنوان';
+    console.log(`📨 دریافت پیام از: ${userName} در گروه: ${chatTitle} (${ctx.chat.id})`);
     
+    // پردازش دستورات اول
+    const messageText = ctx.message.text;
+    
+    if (messageText.startsWith('/')) {
+      console.log(`🎯 دستور دریافت شد: ${messageText}`);
+      // اجازه دهید دستورات توسط handlerهای اصلی پردازش شوند
+      return;
+    }
+
     // فقط پیام‌های گروهی پردازش شوند
     if (ctx.chat.type === 'private') {
       console.log('ℹ️ پیام خصوصی - نادیده گرفته شد');
@@ -233,22 +317,20 @@ bot.on('text', async (ctx) => {
     const userId = ctx.from.id;
     const username = ctx.from.username;
     const firstName = ctx.from.first_name;
-    const messageText = ctx.message.text;
 
     console.log(`🔍 بررسی گروه ${chatId}...`);
 
     // بررسی فعال بودن گروه
     const groupActive = await isGroupActive(chatId);
     if (!groupActive) {
-      console.log('❌ گروه غیرفعال است');
+      console.log('❌ گروه غیرفعال است - XP محاسبه نمی‌شود');
       return;
     }
 
-    console.log('✅ گروه فعال است');
+    console.log('✅ گروه فعال است - محاسبه XP...');
 
     // محاسبه XP
     const xpToAdd = calculateXPFromMessage(messageText);
-    console.log(`📊 خطوط پیام: ${messageText.split('\n').length} - XP قابل دریافت: ${xpToAdd}`);
     
     if (xpToAdd > 0) {
       await saveUserXP(userId, username, firstName, xpToAdd);
@@ -275,107 +357,109 @@ bot.start((ctx) => {
   
   console.log('✅ دسترسی مالک تأیید شد');
   
-  ctx.reply(
-    `🤖 ربات XP مجموعه اکلیس\n\n` +
+  const replyText = `🤖 ربات XP مجموعه اکلیس\n\n` +
     `🔹 /on1 - فعال‌سازی ربات در گروه\n` +
     `🔹 /list_xp - مشاهده لیست XP کاربران\n` +
     `🔹 /status - وضعیت ربات\n\n` +
     `📊 سیستم امتیازدهی:\n` +
     `• هر 4 خط = 20 XP\n` +
-    `• پیام‌های تمام گروه‌های فعال محاسبه می‌شوند`,
-    Markup.keyboard([
+    `• پیام‌های تمام گروه‌های فعال محاسبه می‌شوند`;
+  
+  console.log('📤 ارسال پیام استارت به مالک');
+  
+  if (ctx.chat.type === 'private') {
+    return ctx.reply(replyText, Markup.keyboard([
       ['/on1', '/list_xp'],
       ['/status']
-    ]).resize()
-  );
+    ]).resize());
+  } else {
+    return ctx.reply(replyText);
+  }
 });
 
 // فعال‌سازی ربات در گروه
 bot.command('on1', async (ctx) => {
   try {
-    console.log('🔧 درخواست فعال‌سازی از:', ctx.from.first_name);
+    console.log('🔧 درخواست فعال‌سازی از:', ctx.from.first_name, 'آیدی:', ctx.from.id);
     
     const access = checkOwnerAccess(ctx);
     if (!access.hasAccess) {
+      console.log('🚫 دسترسی غیرمجاز برای فعال‌سازی');
       return ctx.reply(access.message);
     }
 
     if (ctx.chat.type === 'private') {
+      console.log('❌ دستور on1 در پیوی فراخوانی شد');
       return ctx.reply('❌ این دستور فقط در گروه قابل استفاده است');
     }
 
-    const chatId = ctx.chat.id.toString();
+    const chatId = ctx.chat.id;
     const chatTitle = ctx.chat.title || 'بدون عنوان';
 
-    console.log(`🔍 بررسی ادمین بودن در گروه: ${chatTitle}`);
+    console.log(`🔍 بررسی ادمین بودن در گروه: ${chatTitle} (${chatId})`);
 
     // بررسی ادمین بودن ربات
     let isAdmin = false;
     try {
       const chatMember = await ctx.telegram.getChatMember(chatId, ctx.botInfo.id);
       isAdmin = ['administrator', 'creator'].includes(chatMember.status);
-      console.log(`🤖 وضعیت ادمین: ${isAdmin}`);
+      console.log(`🤖 وضعیت ادمین ربات: ${isAdmin}`);
     } catch (error) {
       console.log('❌ خطا در بررسی ادمین:', error.message);
     }
 
     if (!isAdmin) {
+      console.log('❌ ربات ادمین نیست');
       return ctx.reply('❌ لطفاً ابتدا ربات را ادمین گروه کنید و سپس مجدداً /on1 را ارسال کنید.');
     }
 
-    console.log(`✅ ر��ات ادمین است - ذخیره گروه: ${chatId}`);
+    console.log(`✅ ربات ادمین است - فعال‌سازی گروه: ${chatId}`);
 
-    // ذخیره گروه فعال
-    const { error } = await supabase
-      .from('active_groups')
-      .upsert({
-        group_id: chatId,
-        group_title: chatTitle,
-        activated_by: ctx.from.id,
-        activated_at: new Date().toISOString()
-      }, { onConflict: 'group_id' });
+    // فعال کردن گروه
+    const activationResult = await activateGroup(chatId, chatTitle, ctx.from.id);
 
-    if (error) {
-      console.log('❌ خطا در ذخیره گروه:', error);
-      throw error;
+    if (!activationResult) {
+      console.log('❌ خطا در فعال‌سازی گروه در دیتابیس');
+      return ctx.reply('❌ خطا در فعال‌سازی ربات. لطفاً دوباره تلاش کنید.');
     }
 
-    ctx.reply(
-      `✅ ربات XP با موفقیت فعال شد!\n\n` +
+    const successMessage = `✅ ربات XP با موفقیت فعال شد!\n\n` +
       `📊 از این پس پیام‌های کاربران محاسبه شده و به ازای هر 4 خط، 20 XP دریافت می‌کنند.\n\n` +
-      `💡 برای مشاهده امتیازات از دستور /list_xp در پیوی ربات استفاده کنید.`
-    );
+      `💡 برای مشاهده امتیازات از دستور /list_xp در پیوی ربات استفاده کنید.`;
 
     console.log(`✅ ربات XP در گروه ${chatTitle} فعال شد`);
+    await ctx.reply(successMessage);
 
   } catch (error) {
     console.log('❌ خطا در فعال‌سازی ربات:', error.message);
-    ctx.reply('❌ خطا در فعال‌سازی ربات. لطفاً دوباره تلاش کنید.');
+    await ctx.reply('❌ خطا در فعال‌سازی ربات. لطفاً دوباره تلاش کنید.');
   }
 });
 
 // مشاهده لیست XP کاربران
 bot.command('list_xp', async (ctx) => {
   try {
-    console.log('📊 درخواست لیست XP از:', ctx.from.first_name);
+    console.log('📊 درخواست لیست XP از:', ctx.from.first_name, 'آیدی:', ctx.from.id);
     
     const access = checkOwnerAccess(ctx);
     if (!access.hasAccess) {
+      console.log('🚫 دسترسی غیرمجاز برای لیست XP');
       return ctx.reply(access.message);
     }
 
-    // فقط در پیوی قابل استفاده باشد
-    if (ctx.chat.type !== 'private') {
-      return ctx.reply('❌ این دستور فقط در پیوی ربات قابل استفاده است');
-    }
+    console.log('✅ دسترسی مالک برای لیست XP تأیید شد');
 
     await ctx.reply('📊 در حال دریافت لیست کاربران...');
+    console.log('🔍 دریافت لیست کاربران از دیتابیس...');
 
     const users = await getAllUsersXP();
 
     if (!users || users.length === 0) {
+      console.log('📭 هیچ کاربری در دیتابیس یافت نشد');
       return ctx.reply('📭 هیچ کاربری با XP ثبت نشده است.');
     }
+
+    console.log(`📋 ${users.length} کاربر دریافت شد`);
 
     // ایجاد پیام لیست
     let message = `🏆 لیست امتیازات کاربران\n\n`;
@@ -392,16 +476,21 @@ bot.command('list_xp', async (ctx) => {
     });
 
     if (userCount === 0) {
+      console.log('📭 هیچ کاربری با XP مثبت یافت نشد');
       return ctx.reply('📭 هیچ کاربری با XP ثبت نشده است.');
     }
 
     message += `\n📈 جمع کل: ${totalXP} XP\n👥 تعداد کاربران: ${userCount}`;
 
+    console.log(`📤 ارسال لیست ${userCount} کاربر با ${totalXP} XP`);
+    
     // ارسال لیست
     await ctx.reply(message);
 
     // ریست XP کاربران
     await ctx.reply('🔄 در حال ریست کردن امتیازات...');
+    console.log('🔄 شروع ریست XP...');
+    
     const resetResult = await resetAllXP();
     
     if (resetResult) {
@@ -409,11 +498,12 @@ bot.command('list_xp', async (ctx) => {
       console.log(`✅ لیست XP توسط مالک مشاهده و ریست شد - ${userCount} کاربر`);
     } else {
       await ctx.reply('❌ خطا در ریست کردن امتیازات.');
+      console.log('❌ خطا در ریست XP');
     }
 
   } catch (error) {
     console.log('❌ خطا در دریافت لیست XP:', error.message);
-    ctx.reply('❌ خطا در دریافت لیست کاربران.');
+    await ctx.reply('❌ خطا در دریافت لیست کاربران.');
   }
 });
 
@@ -426,6 +516,8 @@ bot.command('status', async (ctx) => {
     if (!access.hasAccess) {
       return ctx.reply(access.message);
     }
+
+    console.log('🔍 دریافت آمار از دیتابیس...');
 
     // دریافت آمار
     const { data: groups, error: groupsError } = await supabase
@@ -448,11 +540,13 @@ bot.command('status', async (ctx) => {
     statusMessage += `🔹 وضعیت: فعال ✅\n\n`;
     statusMessage += `📊 سیستم: هر 4 خط = 20 XP`;
 
-    ctx.reply(statusMessage);
+    console.log(`📊 آمار: ${activeGroups} گروه فعال, ${activeUsers} کاربر, ${totalXP} XP`);
+
+    await ctx.reply(statusMessage);
 
   } catch (error) {
     console.log('❌ خطا در دریافت وضعیت:', error.message);
-    ctx.reply('❌ خطا در دریافت وضعیت ربات.');
+    await ctx.reply('❌ خطا در دریافت وضعیت ربات.');
   }
 });
 
@@ -469,6 +563,7 @@ app.get('/health', async (req, res) => {
       status: 'healthy',
       bot: SELF_BOT_ID,
       database: error ? 'disconnected' : 'connected',
+      owner: OWNER_ID,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -486,6 +581,14 @@ app.get('/', (req, res) => {
     <p>مالک: ${OWNER_ID}</p>
     <p>Bot ID: ${SELF_BOT_ID}</p>
     <p><a href="/health">بررسی سلامت</a></p>
+    <script>
+      setTimeout(() => {
+        fetch('/health')
+          .then(r => r.json())
+          .then(console.log)
+          .catch(console.error);
+      }, 1000);
+    </script>
   `);
 });
 
@@ -495,7 +598,10 @@ const startServer = async () => {
     console.log('🚀 شروع راه‌اندازی سرور...');
     
     // مقداردهی اولیه دیتابیس
-    await initializeDatabase();
+    const dbReady = await initializeDatabase();
+    if (!dbReady) {
+      console.log('❌ خطا در اتصال به دیتابیس');
+    }
     
     // استفاده از webhook در رندر
     if (process.env.RENDER_EXTERNAL_URL) {
@@ -508,7 +614,9 @@ const startServer = async () => {
       console.log('✅ Webhook تنظیم شد');
     } else {
       console.log('🔧 استفاده از polling...');
-      bot.launch();
+      bot.launch().then(() => {
+        console.log('✅ ربات با polling راه‌اندازی شد');
+      });
     }
     
     // شروع سرور
@@ -520,16 +628,6 @@ const startServer = async () => {
       startAutoPing();
     });
 
-    // مدیریت graceful shutdown
-    process.once('SIGINT', () => {
-      console.log('🛑 توقف ربات...');
-      bot.stop('SIGINT');
-    });
-    process.once('SIGTERM', () => {
-      console.log('🛑 توقف ربات...');
-      bot.stop('SIGTERM');
-    });
-
   } catch (error) {
     console.log('❌ خطا در راه‌اندازی سرور:', error.message);
     process.exit(1);
@@ -539,12 +637,11 @@ const startServer = async () => {
 // شروع برنامه
 startServer();
 
-// مدیریت خطاهای catch نشده
+// مدیریت خطاها
 process.on('unhandledRejection', (error) => {
   console.log('❌ خطای catch نشده:', error.message);
 });
 
 process.on('uncaughtException', (error) => {
   console.log('❌ خطای مدیریت نشده:', error);
-  process.exit(1);
 });
