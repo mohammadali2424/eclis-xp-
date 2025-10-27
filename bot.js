@@ -196,6 +196,96 @@ const saveUserXP = async (userId, username, firstName, xpToAdd) => {
   return 0;
 };
 
+// کسر XP از کاربر (برای دستور warn)
+const deductUserXP = async (userId, xpToDeduct, warnedBy) => {
+  try {
+    console.log(`⚠️ کسر XP از کاربر ${userId}: ${xpToDeduct} XP`);
+    
+    const { data: existingUser, error: fetchError } = await supabase
+      .from('user_xp')
+      .select('*')
+      .eq('user_id', userId)
+      .single();
+
+    if (fetchError && fetchError.code === 'PGRST116') {
+      // کاربر جدید - ایجاد کاربر با XP منفی
+      const { error: insertError } = await supabase
+        .from('user_xp')
+        .insert({
+          user_id: userId,
+          username: '',
+          first_name: 'کاربر اخطاری',
+          total_xp: -xpToDeduct,
+          current_xp: -xpToDeduct,
+          message_count: 0,
+          last_active: new Date().toISOString(),
+          created_at: new Date().toISOString()
+        });
+
+      if (!insertError) {
+        console.log(`✅ کاربر جدید ${userId} با ${-xpToDeduct} XP ایجاد شد`);
+        
+        // ذخیره تاریخچه اخطار
+        await saveWarnHistory(userId, warnedBy, xpToDeduct, -xpToDeduct);
+        
+        return -xpToDeduct;
+      } else {
+        console.log('❌ خطا در insert کاربر جدید:', insertError);
+      }
+    } else if (!fetchError && existingUser) {
+      // کاربر موجود - کسر XP
+      const newCurrentXP = existingUser.current_xp - xpToDeduct;
+
+      const { error: updateError } = await supabase
+        .from('user_xp')
+        .update({
+          current_xp: newCurrentXP,
+          last_active: new Date().toISOString()
+        })
+        .eq('user_id', userId);
+
+      if (!updateError) {
+        console.log(`📉 کاربر ${userId} -${xpToDeduct} XP (مجموع: ${newCurrentXP})`);
+        
+        // ذخیره تاریخچه اخطار
+        await saveWarnHistory(userId, warnedBy, xpToDeduct, newCurrentXP);
+        
+        return newCurrentXP;
+      } else {
+        console.log('❌ خطا در update کاربر:', updateError);
+      }
+    } else {
+      console.log('❌ خطای fetch کاربر:', fetchError);
+    }
+  } catch (error) {
+    console.log('❌ خطا در کسر XP:', error.message);
+  }
+  return 0;
+};
+
+// ذخیره تاریخچه اخطارها
+const saveWarnHistory = async (userId, warnedBy, xpDeducted, newXP) => {
+  try {
+    const { error } = await supabase
+      .from('warn_history')
+      .insert({
+        user_id: userId,
+        warned_by: warnedBy,
+        xp_deducted: xpDeducted,
+        new_xp: newXP,
+        warned_at: new Date().toISOString()
+      });
+
+    if (error) {
+      console.log('❌ خطا در ذخیره تاریخچه اخطار:', error);
+    } else {
+      console.log('✅ تاریخچه اخطار ذخیره شد');
+    }
+  } catch (error) {
+    console.log('❌ خطا در ذخیره تاریخچه:', error.message);
+  }
+};
+
 // بررسی فعال بودن گروه
 const isGroupActive = async (chatId) => {
   try {
@@ -458,6 +548,7 @@ bot.start((ctx) => {
     `🔹 /off1 - غیرفعال‌سازی و خروج از گروه\n` +
     `🔹 /list_xp - مشاهده لیست XP کاربران\n` +
     `🔹 /status - وضعیت ربات\n` +
+    `🔹 /warn [مقدار] - کسر XP از کاربر (با ریپلای)\n` +
     `🔹 /cleanup - پاک‌سازی داده‌های قدیمی`;
   
   console.log('📤 ارسال پیام استارت به مالک');
@@ -465,7 +556,7 @@ bot.start((ctx) => {
   if (ctx.chat.type === 'private') {
     return ctx.reply(replyText, Markup.keyboard([
       ['/on1', '/off1', '/list_xp'],
-      ['/status', '/cleanup']
+      ['/status', '/warn', '/cleanup']
     ]).resize());
   } else {
     return ctx.reply(replyText);
@@ -524,6 +615,8 @@ bot.command('on1', async (ctx) => {
       `• هر نیم خط = 2.5 XP\n` +
       `• هر خط کامل = 5 XP\n` +
       `• هر 4 خط = 20 XP\n\n` +
+      `⚠️ دستورات مدیریت:\n` +
+      `• /warn [مقدار] - کسر XP از کاربر (با ریپلای)\n\n` +
       `💡 برای مشاهده امتیازات از دستور /list_xp در پیوی ربات استفاده کنید.`;
 
     console.log(`✅ ربات XP در گروه ${chatTitle} فعال شد`);
@@ -618,9 +711,10 @@ bot.command('list_xp', async (ctx) => {
     let totalMessages = 0;
 
     users.forEach((user, index) => {
-      if (user.current_xp > 0) {
+      if (user.current_xp !== 0) { // نمایش کاربران با XP صفر و منفی
         const name = user.first_name || user.username || `User${user.user_id}`;
-        message += `${index + 1}. ${name}: ${user.current_xp} XP (${user.message_count} پیام)\n`;
+        const xpDisplay = user.current_xp < 0 ? `-${Math.abs(user.current_xp)}` : user.current_xp;
+        message += `${index + 1}. ${name}: ${xpDisplay} XP (${user.message_count} پیام)\n`;
         totalXP += user.current_xp;
         totalMessages += user.message_count;
         userCount++;
@@ -628,12 +722,13 @@ bot.command('list_xp', async (ctx) => {
     });
 
     if (userCount === 0) {
-      console.log('📭 هیچ کاربری با XP مثبت یافت نشد');
+      console.log('📭 هیچ کاربری با XP یافت نشد');
       return ctx.reply('📭 هیچ کاربری با XP ثبت نشده است.');
     }
 
+    const totalXPDisplay = totalXP < 0 ? `-${Math.abs(totalXP)}` : totalXP;
     message += `\n📊 آمار کلی:\n`;
-    message += `📈 مجموع XP: ${totalXP}\n`;
+    message += `📈 مجموع XP: ${totalXPDisplay}\n`;
     message += `👥 تعداد کاربران: ${userCount}\n`;
     message += `💬 مجموع پیام‌ها: ${totalMessages}\n\n`;
     message += `🔄 پس از تأیید، تمام XP ها ریست خواهند شد.`;
@@ -675,7 +770,7 @@ bot.command('status', async (ctx) => {
     const { data: users, error: usersError } = await supabase
       .from('user_xp')
       .select('current_xp, message_count')
-      .gt('current_xp', 0);
+      .neq('current_xp', 0);
 
     const { data: allUsers, error: allUsersError } = await supabase
       .from('user_xp')
@@ -687,14 +782,17 @@ bot.command('status', async (ctx) => {
     const totalXP = users && !usersError ? users.reduce((sum, user) => sum + user.current_xp, 0) : 0;
     const totalMessages = users && !usersError ? users.reduce((sum, user) => sum + user.message_count, 0) : 0;
 
+    const totalXPDisplay = totalXP < 0 ? `-${Math.abs(totalXP)}` : totalXP;
+
     let statusMessage = `🥷🏻 وضعیت ربات XP\n\n`;
     statusMessage += `🔹 گروه‌های فعال: ${activeGroups}\n`;
     statusMessage += `🔹 کاربران دارای XP: ${activeUsers}\n`;
     statusMessage += `🔹 کل کاربران ثبت‌شده: ${totalUsers}\n`;
-    statusMessage += `🔹 مجموع XP: ${totalXP}\n`;
+    statusMessage += `🔹 مجموع XP: ${totalXPDisplay}\n`;
     statusMessage += `🔹 مجموع پیام‌ها: ${totalMessages}\n`;
     statusMessage += `🔹 وضعیت: فعال ✅\n\n`;
-    statusMessage += `📊 سیستم: هر نیم خط = 2.5 XP`;
+    statusMessage += `📊 سیستم: هر نیم خط = 2.5 XP\n`;
+    statusMessage += `⚠️ مدیریت: /warn [مقدار] (با ریپلای)`;
 
     console.log(`📊 آمار: ${activeGroups} گروه فعال, ${activeUsers} کاربر, ${totalXP} XP`);
 
@@ -703,6 +801,84 @@ bot.command('status', async (ctx) => {
   } catch (error) {
     console.log('❌ خطا در دریافت وضعیت:', error.message);
     await ctx.reply('❌ خطا در دریافت وضعیت ربات.');
+  }
+});
+
+// دستور warn برای کسر XP از کاربر
+bot.command('warn', async (ctx) => {
+  try {
+    console.log('⚠️ درخواست warn از:', ctx.from.first_name, 'آیدی:', ctx.from.id);
+    
+    const access = checkOwnerAccess(ctx);
+    if (!access.hasAccess) {
+      console.log('🚫 دسترسی غیرمجاز برای warn');
+      return ctx.reply(access.message);
+    }
+
+    // بررسی اینکه آیا در گروه است
+    if (ctx.chat.type === 'private') {
+      console.log('❌ دستور warn در پیوی فراخوانی شد');
+      return ctx.reply('❌ این دستور فقط در گروه قابل استفاده است');
+    }
+
+    // بررسی ریپلای بودن
+    if (!ctx.message.reply_to_message) {
+      console.log('❌ دستور warn بدون ریپلای استفاده شده');
+      return ctx.reply('❌ لطفاً با ریپلای روی پیام کاربر از این دستور استفاده کنید.\n\nمثال:\n<code>/warn 350</code>', { 
+        parse_mode: 'HTML' 
+      });
+    }
+
+    // بررسی آرگومان
+    const args = ctx.message.text.split(' ');
+    if (args.length < 2) {
+      console.log('❌ دستور warn بدون مقدار استفاده شده');
+      return ctx.reply('❌ لطفاً مقدار XP برای کسر را وارد کنید.\n\nمثال:\n<code>/warn 350</code>', { 
+        parse_mode: 'HTML' 
+      });
+    }
+
+    const xpToDeduct = parseFloat(args[1]);
+    if (isNaN(xpToDeduct) || xpToDeduct <= 0) {
+      console.log('❌ مقدار نامعتبر برای warn');
+      return ctx.reply('❌ مقدار XP باید یک عدد مثبت باشد.\n\nمثال:\n<code>/warn 350</code>', { 
+        parse_mode: 'HTML' 
+      });
+    }
+
+    // بررسی فعال بودن گروه
+    const chatId = ctx.chat.id;
+    const groupActive = await isGroupActive(chatId);
+    if (!groupActive) {
+      console.log('❌ گروه غیرفعال است - warn انجام نمی‌شود');
+      return ctx.reply('❌ گروه غیرفعال است. ابتدا ربات را با /on1 فعال کنید.');
+    }
+
+    // دریافت اطلاعات کاربر مورد نظر
+    const targetUser = ctx.message.reply_to_message.from;
+    const targetUserId = targetUser.id;
+    const targetUserName = targetUser.first_name || targetUser.username || 'ناشناس';
+
+    console.log(`⚠️ کسر ${xpToDeduct} XP از کاربر ${targetUserName} (${targetUserId})`);
+
+    // کسر XP از کاربر
+    const newXP = await deductUserXP(targetUserId, xpToDeduct, ctx.from.id);
+
+    const newXPDisplay = newXP < 0 ? `-${Math.abs(newXP)}` : newXP;
+
+    const warnMessage = `⚠️ اخطار به کاربر\n\n` +
+      `👤 کاربر: ${targetUserName}\n` +
+      `📉 ${xpToDeduct} XP کسر شد\n` +
+      `💠 XP جدید: ${newXPDisplay}\n` +
+      `🕒 زمان: ${new Date().toLocaleTimeString('fa-IR')}`;
+
+    await ctx.reply(warnMessage);
+
+    console.log(`✅ warn با موفقیت انجام شد - XP جدید: ${newXP}`);
+
+  } catch (error) {
+    console.log('❌ خطا در اجرای دستور warn:', error.message);
+    await ctx.reply('❌ خطا در اجرای دستور warn. لطفاً دوباره تلاش کنید.');
   }
 });
 
