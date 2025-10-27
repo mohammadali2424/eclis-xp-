@@ -106,7 +106,8 @@ const saveUserXP = async (userId, username, firstName, xpToAdd) => {
           total_xp: xpToAdd,
           current_xp: xpToAdd,
           message_count: 1,
-          last_active: new Date().toISOString()
+          last_active: new Date().toISOString(),
+          created_at: new Date().toISOString()
         });
 
       if (!insertError) {
@@ -157,6 +158,7 @@ const isGroupActive = async (chatId) => {
       .from('active_groups')
       .select('group_id')
       .eq('group_id', chatId.toString())
+      .eq('is_active', true)
       .single();
 
     const isActive = !error && data;
@@ -179,7 +181,8 @@ const activateGroup = async (chatId, chatTitle, activatedBy) => {
         group_id: chatId.toString(),
         group_title: chatTitle,
         activated_by: activatedBy,
-        activated_at: new Date().toISOString()
+        activated_at: new Date().toISOString(),
+        is_active: true
       }, { onConflict: 'group_id' });
 
     if (error) {
@@ -195,6 +198,32 @@ const activateGroup = async (chatId, chatTitle, activatedBy) => {
   }
 };
 
+// غیرفعال کردن گروه
+const deactivateGroup = async (chatId) => {
+  try {
+    console.log(`🔧 غیرفعال‌سازی گروه ${chatId}...`);
+    
+    const { error } = await supabase
+      .from('active_groups')
+      .update({
+        is_active: false,
+        deactivated_at: new Date().toISOString()
+      })
+      .eq('group_id', chatId.toString());
+
+    if (error) {
+      console.log('❌ خطا در غیرفعال‌سازی گروه:', error);
+      return false;
+    }
+    
+    console.log(`✅ گروه ${chatId} با موفقیت غیرفعال شد`);
+    return true;
+  } catch (error) {
+    console.log('❌ خطا در deactivateGroup:', error.message);
+    return false;
+  }
+};
+
 // دریافت لیست تمام کاربران با XP
 const getAllUsersXP = async () => {
   try {
@@ -202,7 +231,7 @@ const getAllUsersXP = async () => {
     
     const { data, error } = await supabase
       .from('user_xp')
-      .select('user_id, username, first_name, current_xp, message_count')
+      .select('user_id, username, first_name, current_xp, message_count, total_xp')
       .order('current_xp', { ascending: false });
 
     if (!error && data) {
@@ -242,17 +271,72 @@ const resetAllXP = async () => {
   return false;
 };
 
-// ==================[ محاسبه XP ]==================
+// پاک‌سازی داده‌های قدیمی
+const cleanupOldData = async () => {
+  try {
+    console.log('🧹 شروع پاک‌سازی داده‌های قدیمی...');
+    
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    
+    // پاک‌سازی کاربرانی که بیش از یک هفته غیرفعال بوده‌اند و XP جاری صفر دارند
+    const { error: userError } = await supabase
+      .from('user_xp')
+      .delete()
+      .lt('last_active', oneWeekAgo.toISOString())
+      .eq('current_xp', 0);
+
+    if (userError) {
+      console.log('❌ خطا در پاک‌سازی کاربران قدیمی:', userError);
+    } else {
+      console.log('✅ کارب��ان قدیمی پاک‌سازی شدند');
+    }
+
+    // پاک‌سازی گروه‌های غیرفعال قدیمی
+    const { error: groupError } = await supabase
+      .from('active_groups')
+      .delete()
+      .eq('is_active', false)
+      .lt('deactivated_at', oneWeekAgo.toISOString());
+
+    if (groupError) {
+      console.log('❌ خطا در پاک‌سازی گروه‌های قدیمی:', groupError);
+    } else {
+      console.log('✅ گروه‌های قدیمی پاک‌سازی شدند');
+    }
+
+    return true;
+  } catch (error) {
+    console.log('❌ خطا در پاک‌سازی داده‌های قدیمی:', error.message);
+    return false;
+  }
+};
+
+// ==================[ محاسبه XP - هر نیم خط 2.5 XP ]==================
 const calculateXPFromMessage = (text) => {
   if (!text || typeof text !== 'string') return 0;
   
+  // محاسبه تعداد خطوط کامل و نیم خطوط
   const lines = text.split('\n').filter(line => line.trim().length > 0);
-  const lineCount = lines.length;
   
-  // هر 4 خط = 20 XP
-  const xpEarned = Math.floor(lineCount / 4) * 20;
+  let totalHalfLines = 0;
   
-  console.log(`📊 محاسبه XP: ${lineCount} خط = ${xpEarned} XP`);
+  lines.forEach(line => {
+    const words = line.trim().split(/\s+/);
+    const wordCount = words.length;
+    
+    // اگر خط کمتر از 3 کلمه داشته باشد، نیم خط محسوب می‌شود
+    if (wordCount <= 3) {
+      totalHalfLines += 1; // نیم خط
+    } else {
+      totalHalfLines += 2; // خط کامل
+    }
+  });
+  
+  // هر نیم خط = 2.5 XP
+  const xpEarned = totalHalfLines * 2.5;
+  
+  console.log(`📊 محاسبه XP: ${lines.length} خط -> ${totalHalfLines} نیم خط = ${xpEarned} XP`);
   return xpEarned;
 };
 
@@ -282,7 +366,7 @@ bot.on('new_chat_members', async (ctx) => {
         }
         
         console.log(`✅ ربات توسط مالک ${addedBy.id} اضافه شد`);
-        await ctx.reply('✅ ربات با موفقیت اضافه شد! از /on1 برای فعال‌سازی استفاده کنید.');
+        await ctx.reply('🥷🏻 نینجای اکلیس بیداره! از /on1 برای فعال‌سازی استفاده کنید.');
         return;
       }
     }
@@ -305,20 +389,19 @@ bot.start((ctx) => {
   
   console.log('✅ دسترسی مالک تأیید شد');
   
-  const replyText = `🤖 ربات XP مجموعه اکلیس\n\n` +
+  const replyText = `🥷🏻 نینجای اکلیس بیداره\n\n` +
     `🔹 /on1 - فعال‌سازی ربات در گروه\n` +
+    `🔹 /off1 - غیرفعال‌سازی و خروج از گروه\n` +
     `🔹 /list_xp - مشاهده لیست XP کاربران\n` +
-    `🔹 /status - وضعیت ربات\n\n` +
-    `📊 سیستم امتیازدهی:\n` +
-    `• هر 4 خط = 20 XP\n` +
-    `• پیام‌های تمام گروه‌های فعال محاسبه می‌شوند`;
+    `🔹 /status - وضعیت ربات\n` +
+    `🔹 /cleanup - پاک‌سازی داده‌های قدیمی`;
   
   console.log('📤 ارسال پیام استارت به مالک');
   
   if (ctx.chat.type === 'private') {
     return ctx.reply(replyText, Markup.keyboard([
-      ['/on1', '/list_xp'],
-      ['/status']
+      ['/on1', '/off1', '/list_xp'],
+      ['/status', '/cleanup']
     ]).resize());
   } else {
     return ctx.reply(replyText);
@@ -371,8 +454,11 @@ bot.command('on1', async (ctx) => {
       return ctx.reply('❌ خطا در فعال‌سازی ربات. لطفاً دوباره تلاش کنید.');
     }
 
-    const successMessage = `✅ ربات XP با موفقیت فعال شد!\n\n` +
-      `📊 از این پس پیام‌های کاربران محاسبه شده و به ازای هر 4 خط، 20 XP دریافت می‌کنند.\n\n` +
+    const successMessage = `🥷🏻 نینجای شماره 3 در خدمت شماست\n\n` +
+      `📊 سیستم محاسبه XP:\n` +
+      `• هر نیم خط = 2.5 XP\n` +
+      `• هر خط کامل = 5 XP\n` +
+      `• هر 4 خط = 20 XP\n\n` +
       `💡 برای مشاهده امتیازات از دستور /list_xp در پیوی ربات استفاده کنید.`;
 
     console.log(`✅ ربات XP در گروه ${chatTitle} فعال شد`);
@@ -381,6 +467,51 @@ bot.command('on1', async (ctx) => {
   } catch (error) {
     console.log('❌ خطا در فعال‌سازی ربات:', error.message);
     await ctx.reply('❌ خطا در فعال‌سازی ربات. لطفاً دوباره تلاش کنید.');
+  }
+});
+
+// غیرفعال‌سازی و خروج از گروه
+bot.command('off1', async (ctx) => {
+  try {
+    console.log('🔧 درخواست غیرفعال‌سازی از:', ctx.from.first_name, 'آیدی:', ctx.from.id);
+    
+    const access = checkOwnerAccess(ctx);
+    if (!access.hasAccess) {
+      console.log('🚫 دسترسی غیرمجاز برای غیرفعال‌سازی');
+      return ctx.reply(access.message);
+    }
+
+    if (ctx.chat.type === 'private') {
+      console.log('❌ دستور off1 در پیوی فراخوانی شد');
+      return ctx.reply('❌ این دستور فقط در گروه قابل استفاده است');
+    }
+
+    const chatId = ctx.chat.id;
+    const chatTitle = ctx.chat.title || 'بدون عنوان';
+
+    console.log(`🔧 غیرفعال‌سازی گروه: ${chatTitle} (${chatId})`);
+
+    // غیرفعال کردن گروه در دیتابیس
+    const deactivationResult = await deactivateGroup(chatId);
+
+    if (!deactivationResult) {
+      console.log('❌ خطا در غیرفعال‌سازی گروه در دیتابیس');
+      return ctx.reply('❌ خطا در غیرفعال‌سازی ربات. لطفاً دوباره تلاش کنید.');
+    }
+
+    // خروج از گروه
+    try {
+      await ctx.reply('👋 نینجای اکلیس در حال خروج...');
+      await ctx.leaveChat();
+      console.log(`✅ ربات با موفقیت از گروه ${chatTitle} خارج شد`);
+    } catch (leaveError) {
+      console.log('❌ خطا در خروج از گروه:', leaveError.message);
+      await ctx.reply('✅ ربات غیرفعال شد اما خطا در خروج از گروه. ممکن است نیاز باشد دستی حذف شود.');
+    }
+
+  } catch (error) {
+    console.log('❌ خطا در غیرفعال‌سازی ربات:', error.message);
+    await ctx.reply('❌ خطا در غیرفعال‌سازی ربات. لطفاً دوباره تلاش کنید.');
   }
 });
 
@@ -397,7 +528,13 @@ bot.command('list_xp', async (ctx) => {
 
     console.log('✅ دسترسی مالک برای لیست XP تأیید شد');
 
-    await ctx.reply('📊 در حال دریافت لیست کاربران...');
+    // فقط در پیوی اجازه داده شود
+    if (ctx.chat.type !== 'private') {
+      console.log('❌ دستور list_xp در گروه فراخوانی شد');
+      return ctx.reply('❌ این دستور فقط در پیوی ربات قابل استفاده است.');
+    }
+
+    await ctx.reply('📊 در حال دریافت لیست کاربران از تمام گروه‌ها...');
     console.log('🔍 دریافت لیست کاربران از دیتابیس...');
 
     const users = await getAllUsersXP();
@@ -410,15 +547,17 @@ bot.command('list_xp', async (ctx) => {
     console.log(`📋 ${users.length} کاربر دریافت شد`);
 
     // ایجاد پیام لیست
-    let message = `🏆 لیست امتیازات کاربران\n\n`;
+    let message = `🏆 لیست امتیازات کاربران از تمام گروه‌ها\n\n`;
     let totalXP = 0;
     let userCount = 0;
+    let totalMessages = 0;
 
     users.forEach((user, index) => {
       if (user.current_xp > 0) {
         const name = user.first_name || user.username || `User${user.user_id}`;
-        message += `${index + 1}. ${name}: ${user.current_xp} XP\n`;
+        message += `${index + 1}. ${name}: ${user.current_xp} XP (${user.message_count} پیام)\n`;
         totalXP += user.current_xp;
+        totalMessages += user.message_count;
         userCount++;
       }
     });
@@ -428,26 +567,21 @@ bot.command('list_xp', async (ctx) => {
       return ctx.reply('📭 هیچ کاربری با XP ثبت نشده است.');
     }
 
-    message += `\n📈 جمع کل: ${totalXP} XP\n👥 تعداد کاربران: ${userCount}`;
+    message += `\n📊 آمار کلی:\n`;
+    message += `📈 مجموع XP: ${totalXP}\n`;
+    message += `👥 تعداد کاربران: ${userCount}\n`;
+    message += `💬 مجموع پیام‌ها: ${totalMessages}\n\n`;
+    message += `🔄 پس از تأیید، تمام XP ها ریست خواهند شد.`;
 
     console.log(`📤 ارسال لیست ${userCount} کاربر با ${totalXP} XP`);
-    
-    // ارسال لیست
-    await ctx.reply(message);
 
-    // ریست XP کاربران
-    await ctx.reply('🔄 در حال ریست کردن امتیازات...');
-    console.log('🔄 شروع ریست XP...');
-    
-    const resetResult = await resetAllXP();
-    
-    if (resetResult) {
-      await ctx.reply('✅ امتیازات تمام کاربران با موفقیت ریست شدند.');
-      console.log(`✅ لیست XP توسط مالک مشاهده و ریست شد - ${userCount} کاربر`);
-    } else {
-      await ctx.reply('❌ خطا در ریست کردن امتیازات.');
-      console.log('❌ خطا در ریست XP');
-    }
+    // دکمه تأیید ریست
+    const confirmKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('✅ تأیید و ریست XP ها', 'confirm_reset')],
+      [Markup.button.callback('❌ انصراف', 'cancel_reset')]
+    ]);
+
+    await ctx.reply(message, confirmKeyboard);
 
   } catch (error) {
     console.log('❌ خطا در دریافت لیست XP:', error.message);
@@ -470,23 +604,32 @@ bot.command('status', async (ctx) => {
     // دریافت آمار
     const { data: groups, error: groupsError } = await supabase
       .from('active_groups')
-      .select('group_id, group_title');
+      .select('group_id, group_title')
+      .eq('is_active', true);
 
     const { data: users, error: usersError } = await supabase
       .from('user_xp')
-      .select('current_xp')
+      .select('current_xp, message_count')
       .gt('current_xp', 0);
+
+    const { data: allUsers, error: allUsersError } = await supabase
+      .from('user_xp')
+      .select('user_id');
 
     const activeGroups = groups && !groupsError ? groups.length : 0;
     const activeUsers = users && !usersError ? users.length : 0;
+    const totalUsers = allUsers && !allUsersError ? allUsers.length : 0;
     const totalXP = users && !usersError ? users.reduce((sum, user) => sum + user.current_xp, 0) : 0;
+    const totalMessages = users && !usersError ? users.reduce((sum, user) => sum + user.message_count, 0) : 0;
 
     let statusMessage = `🤖 وضعیت ربات XP\n\n`;
     statusMessage += `🔹 گروه‌های فعال: ${activeGroups}\n`;
     statusMessage += `🔹 کاربران دارای XP: ${activeUsers}\n`;
+    statusMessage += `🔹 کل کاربران ثبت‌شده: ${totalUsers}\n`;
     statusMessage += `🔹 مجموع XP: ${totalXP}\n`;
+    statusMessage += `🔹 مجموع پیام‌ها: ${totalMessages}\n`;
     statusMessage += `🔹 وضعیت: فعال ✅\n\n`;
-    statusMessage += `📊 سیستم: هر 4 خط = 20 XP`;
+    statusMessage += `📊 سیستم: هر نیم خط = 2.5 XP`;
 
     console.log(`📊 آمار: ${activeGroups} گروه فعال, ${activeUsers} کاربر, ${totalXP} XP`);
 
@@ -495,6 +638,62 @@ bot.command('status', async (ctx) => {
   } catch (error) {
     console.log('❌ خطا در دریافت وضعیت:', error.message);
     await ctx.reply('❌ خطا در دریافت وضعیت ربات.');
+  }
+});
+
+// پاک‌سازی داده‌های قدیمی
+bot.command('cleanup', async (ctx) => {
+  try {
+    console.log('🧹 درخواست پاک‌سازی از:', ctx.from.first_name);
+    
+    const access = checkOwnerAccess(ctx);
+    if (!access.hasAccess) {
+      return ctx.reply(access.message);
+    }
+
+    await ctx.reply('🧹 در حال پاک‌سازی داده‌های قدیمی (بیش از 1 هفته)...');
+    
+    const cleanupResult = await cleanupOldData();
+    
+    if (cleanupResult) {
+      await ctx.reply('✅ داده‌های قدیمی با موفقیت پاک‌سازی شدند.');
+    } else {
+      await ctx.reply('❌ خطا در پاک‌سازی داده‌های قدیمی.');
+    }
+
+  } catch (error) {
+    console.log('❌ خطا در پاک‌سازی:', error.message);
+    await ctx.reply('❌ خطا در پاک‌سازی داده‌های قدیمی.');
+  }
+});
+
+// ==================[ پردازش Callback ها ]==================
+bot.action('confirm_reset', async (ctx) => {
+  try {
+    console.log('🔄 تأیید ریست XP توسط مالک');
+    
+    await ctx.editMessageText('🔄 در حال ریست کردن امتیازات...');
+    
+    const resetResult = await resetAllXP();
+    
+    if (resetResult) {
+      await ctx.editMessageText('✅ امتیازات تمام کاربران با موفقیت ریست شدند.');
+      console.log('✅ XP ها توسط مالک ریست شدند');
+    } else {
+      await ctx.editMessageText('❌ خطا در ریست کردن امتیازات.');
+    }
+  } catch (error) {
+    console.log('❌ خطا در پردازش تأیید:', error.message);
+    await ctx.editMessageText('❌ خطا در ریست کردن امتیازات.');
+  }
+});
+
+bot.action('cancel_reset', async (ctx) => {
+  try {
+    await ctx.editMessageText('❌ ریست XP لغو شد.');
+    console.log('❌ ریست XP توسط مالک لغو شد');
+  } catch (error) {
+    console.log('❌ خطا در لغو:', error.message);
   }
 });
 
@@ -532,13 +731,13 @@ bot.on('text', async (ctx) => {
 
     console.log('✅ گروه فعال است - محاسبه XP...');
 
-    // محاسبه XP
+    // محاسبه XP - هر نیم خط 2.5 XP
     const xpToAdd = calculateXPFromMessage(ctx.message.text);
     
     if (xpToAdd > 0) {
       await saveUserXP(userId, username, firstName, xpToAdd);
     } else {
-      console.log('ℹ️ XP کافی برای افزودن نیست');
+      console.log('��️ XP کافی برای افزودن نیست');
     }
 
   } catch (error) {
@@ -554,6 +753,9 @@ app.get('/health', async (req, res) => {
       .from('active_groups')
       .select('count')
       .limit(1);
+
+    // پاک‌سازی دوره‌ای داده‌های قدیمی
+    await cleanupOldData();
 
     res.json({
       status: 'healthy',
