@@ -864,13 +864,15 @@ bot.command('warn', async (ctx) => {
     // کسر XP از کاربر
     const newXP = await deductUserXP(targetUserId, xpToDeduct, ctx.from.id);
 
-    const newXPDisplay = newXP < 0 ? `-${Math.abs(newXP)}` : newXP;
+    // زمان فعلی به صورت فارسی
+    const now = new Date();
+    const timeString = now.toLocaleTimeString('fa-IR', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
 
-    const warnMessage = `⚠️ اخطار به کاربر\n\n` +
-      `👤 کاربر: ${targetUserName}\n` +
-      `📉 ${xpToDeduct} XP کسر شد\n` +
-      `💠 XP جدید: ${newXPDisplay}\n` +
-      `🕒 زمان: ${new Date().toLocaleTimeString('fa-IR')}`;
+    // پیام ساده فقط با ساعت و مقدار کسر شده
+    const warnMessage = `⏰ ${timeString} | -${xpToDeduct} XP`;
 
     await ctx.reply(warnMessage);
 
