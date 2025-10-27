@@ -1,4 +1,4 @@
-const { Telegraf, Markup } = require('telegraf');
+    const { Telegraf, Markup } = require('telegraf');
 const { createClient } = require('@supabase/supabase-js');
 const express = require('express');
 const axios = require('axios');
@@ -862,21 +862,23 @@ bot.command('warn', async (ctx) => {
     console.log(`⚠️ کسر ${xpToDeduct} XP از کاربر ${targetUserName} (${targetUserId})`);
 
     // کسر XP از کاربر
-    const newXP = await deductUserXP(targetUserId, xpToDeduct, ctx.from.id);
+    await deductUserXP(targetUserId, xpToDeduct, ctx.from.id);
 
-    // زمان فعلی به صورت فارسی
+    // زمان به صورت خلاصه
     const now = new Date();
-    const timeString = now.toLocaleTimeString('fa-IR', {
-      hour: '2-digit',
+    const timeString = now.toLocaleTimeString('fa-IR', { 
+      hour: '2-digit', 
       minute: '2-digit'
     });
 
-    // پیام ساده فقط با ساعت و مقدار کسر شده
-    const warnMessage = `⏰ ${timeString} | -${xpToDeduct} XP`;
+    // پیام ساده شده - فقط نام کاربر، مقدار کسر شده و زمان
+    const warnMessage = `👤 ${targetUserName}\n` +
+      `📉 ${xpToDeduct} XP کسر شد\n` +
+      `🕒 ${timeString}`;
 
     await ctx.reply(warnMessage);
 
-    console.log(`✅ warn با موفقیت انجام شد - XP جدید: ${newXP}`);
+    console.log(`✅ warn با موفقیت انجام شد - ${xpToDeduct} XP از کاربر ${targetUserName} کسر شد`);
 
   } catch (error) {
     console.log('❌ خطا در اجرای دستور warn:', error.message);
