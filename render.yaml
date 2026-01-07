@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: rr-telegram-counter-3bots
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    autoDeploy: true
+    envVars:
+      - key: BOT_TOKEN_1
+        sync: false
+      - key: BOT_TOKEN_2
+        sync: false
+      - key: BOT_TOKEN_3
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: DEFAULT_INTERVAL_SECONDS
+        value: "1"
+      - key: MAX_COUNT
+        value: "1000"
+      - key: MIN_INTERVAL
+        value: "0.2"
+      - key: MAX_INTERVAL
+        value: "3600"
