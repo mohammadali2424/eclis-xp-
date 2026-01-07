@@ -263,13 +263,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ============================================================
 # Webhook startup
 # ============================================================
-async def on_startup(app: Application) -> None:
-    if not PUBLIC_URL:
-        logger.warning("PUBLIC_URL not set; webhook will not be set automatically.")
-        return
-    url = f"{PUBLIC_URL}/telegram/webhook"
-    await app.bot.set_webhook(url=url)
-    logger.info("Webhook set to %s", url)
 
 def main() -> None:
     app = Application.builder().token(BOT_TOKEN_1).post_init(on_startup).build()
