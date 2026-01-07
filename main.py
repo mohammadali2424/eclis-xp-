@@ -272,12 +272,13 @@ def main() -> None:
     app.add_handler(CommandHandler("interval", cmd_interval))
     app.add_handler(CallbackQueryHandler(on_button))
 
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path="telegram/webhook",
-        allowed_updates=Update.ALL_TYPES,
-    )
+  app.run_webhook(
+    listen="0.0.0.0",
+    port=PORT,
+    url_path="telegram/webhook",
+    webhook_url=f"{PUBLIC_URL}/telegram/webhook",
+    allowed_updates=Update.ALL_TYPES,
+)
 
 if __name__ == "__main__":
     main()
