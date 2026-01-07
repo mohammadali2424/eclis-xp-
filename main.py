@@ -265,6 +265,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ============================================================
 
 def main() -> None:
+    if not PUBLIC_URL or not PUBLIC_URL.startswith("https://"):
+        raise RuntimeError("PUBLIC_URL must be set and must start with https://")
+
+    webhook = f"{PUBLIC_URL}/telegram/webhook"
+
     app = Application.builder().token(BOT_TOKEN_1).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
@@ -272,13 +277,13 @@ def main() -> None:
     app.add_handler(CommandHandler("interval", cmd_interval))
     app.add_handler(CallbackQueryHandler(on_button))
 
-  app.run_webhook(
-    listen="0.0.0.0",
-    port=PORT,
-    url_path="telegram/webhook",
-    webhook_url=f"{PUBLIC_URL}/telegram/webhook",
-    allowed_updates=Update.ALL_TYPES,
-)
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="telegram/webhook",
+        webhook_url=webhook,
+        allowed_updates=Update.ALL_TYPES,
+    )
 
 if __name__ == "__main__":
     main()
