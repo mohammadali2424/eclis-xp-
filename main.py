@@ -265,7 +265,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ============================================================
 
 def main() -> None:
-    app = Application.builder().token(BOT_TOKEN_1).post_init(on_startup).build()
+    app = Application.builder().token(BOT_TOKEN_1).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
